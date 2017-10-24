@@ -28,9 +28,9 @@ public protocol TextViewAttachmentDelegate: class {
     ///     - textView: The textView that is requesting the image.
     ///     - imageAttachment: The image attachment that was added to the storage.
     ///
-    /// - Returns: the requested `NSURL` where the image is stored.
+    /// - Returns: the requested `URL` where the image is stored, or nil if it's not yet available.
     ///
-    func textView(_ textView: TextView, urlFor imageAttachment: ImageAttachment) -> URL
+    func textView(_ textView: TextView, urlFor imageAttachment: ImageAttachment) -> URL?
 
     /// Called when an attachment doesn't have an available source URL to provide an image representation.
     ///
@@ -143,10 +143,16 @@ open class TextView: UITextView {
 
     var maximumListIndentationLevels = 7
 
-    // MARK: - Properties: GUI Defaults
+    // MARK: - Properties: UI Defaults
 
-    let defaultFont: UIFont
+    open let defaultFont: UIFont
+    open let defaultParagraphStyle: ParagraphStyle
     var defaultMissingImage: UIImage
+    
+    fileprivate var defaultAttributes: [String: Any] {
+        return [NSFontAttributeName: defaultFont,
+                NSParagraphStyleAttributeName: defaultParagraphStyle]
+    }
 
     // MARK: - Properties: Processors
 
@@ -176,26 +182,48 @@ open class TextView: UITextView {
             ensureRemovalOfParagraphAttributesAfterSelectionChange()
             return super.typingAttributes
         }
-
         set {
             super.typingAttributes = newValue
         }
     }
 
+    /// This property returns the Attributes associated to the Extra Line Fragment.
+    ///
+    public var extraLineFragmentTypingAttributes: [String: Any] {
+        guard selectedTextRange?.start != endOfDocument else {
+            return typingAttributes
+        }
+
+        let string = textStorage.string
+        
+        guard !string.isEndOfParagraph(before: string.endIndex) else {
+            return defaultAttributes
+        }
+        
+        let lastLocation = max(string.characters.count - 1, 0)
+        
+        return textStorage.attributes(at: lastLocation, effectiveRange: nil)
+    }
+
+
     // MARK: - Init & deinit
 
-    public init(defaultFont: UIFont, defaultMissingImage: UIImage) {
+    public init(
+        defaultFont: UIFont,
+        defaultParagraphStyle: ParagraphStyle = ParagraphStyle.default,
+        defaultMissingImage: UIImage) {
         
         self.defaultFont = defaultFont
+        self.defaultParagraphStyle = defaultParagraphStyle
         self.defaultMissingImage = defaultMissingImage
 
         let storage = TextStorage()
         let layoutManager = LayoutManager()
         let container = NSTextContainer()
 
+        container.widthTracksTextView = true
         storage.addLayoutManager(layoutManager)
         layoutManager.addTextContainer(container)
-        container.widthTracksTextView = true
 
         super.init(frame: CGRect(x: 0, y: 0, width: 10, height: 10), textContainer: container)
         commonInit()
@@ -204,7 +232,9 @@ open class TextView: UITextView {
     required public init?(coder aDecoder: NSCoder) {
 
         defaultFont = UIFont.systemFont(ofSize: 14)
+        defaultParagraphStyle = ParagraphStyle.default
         defaultMissingImage = Assets.imageIcon
+        
         super.init(coder: aDecoder)
         commonInit()
     }
@@ -214,8 +244,10 @@ open class TextView: UITextView {
         storage.attachmentsDelegate = self
         font = defaultFont
         linkTextAttributes = [NSUnderlineStyleAttributeName: NSNumber(value:NSUnderlineStyle.styleSingle.rawValue), NSForegroundColorAttributeName: self.tintColor]
+        typingAttributes = defaultAttributes
         setupMenuController()
         setupAttachmentTouchDetection()
+        setupLayoutManager()
     }
 
     private func setupMenuController() {
@@ -242,6 +274,16 @@ open class TextView: UITextView {
             gesture.require(toFail: attachmentGestureRecognizer)
         }
         addGestureRecognizer(attachmentGestureRecognizer)
+    }
+
+    private func setupLayoutManager() {
+        guard let aztecLayoutManager = layoutManager as? LayoutManager else {
+            return
+        }
+
+        aztecLayoutManager.extraLineFragmentTypingAttributes = { [weak self] in
+            return self?.extraLineFragmentTypingAttributes ?? [:]
+        }
     }
 
     // MARK: - Intercept copy paste operations
@@ -276,7 +318,7 @@ open class TextView: UITextView {
         string.loadLazyAttachments()
 
         storage.replaceCharacters(in: selectedRange, with: string)
-        delegate?.textViewDidChange?(self)
+        notifyTextViewDidChange()
         selectedRange = NSRange(location: selectedRange.location + string.length, length: 0)
     }
 
@@ -291,7 +333,7 @@ open class TextView: UITextView {
         string.loadLazyAttachments()
 
         storage.replaceCharacters(in: selectedRange, with: string)
-        delegate?.textViewDidChange?(self)
+        notifyTextViewDidChange()
         selectedRange = NSRange(location: selectedRange.location + string.length, length: 0)
     }
 
@@ -354,18 +396,15 @@ open class TextView: UITextView {
         pasteboard.items[0][NSAttributedString.pastesboardUTI] = data
     }
 
+    fileprivate func notifyTextViewDidChange() {
+        delegate?.textViewDidChange?(self)
+        NotificationCenter.default.post(name: .UITextViewTextDidChange, object: self)
+    }
+
     // MARK: - Intercept keyboard operations
 
     open override func insertText(_ text: String) {
         
-        // For some reason the text view is allowing the attachment style to be set in
-        // typingAttributes.  That's simply not acceptable.
-        //
-        // This was causing the following issue:
-        // https://github.com/wordpress-mobile/AztecEditor-iOS/issues/462
-        //
-        typingAttributes[NSAttachmentAttributeName] = nil
-
         // For some reason the text view is allowing the attachment style to be set in
         // typingAttributes.  That's simply not acceptable.
         //
@@ -399,7 +438,20 @@ open class TextView: UITextView {
 
         ensureRemovalOfLinkTypingAttribute(at: selectedRange)
 
-        super.insertText(text)
+        // WORKAROUND: iOS 11 introduced an issue that's causing UITextView to lose it's typing
+        // attributes under certain circumstances.  The attributes are lost exactly after the call
+        // to `super.insertText(text)`.  Our workaround is to simply save the typing attributes
+        // and restore them after that call.
+        //
+        // Issue: https://github.com/wordpress-mobile/AztecEditor-iOS/issues/725
+        //
+        // Diego: I reproduced this issue in a very simple project (completely unrelated to Aztec)
+        //      as a demonstration that this is an SDK issue.  I also reported this issue to
+        //      Apple (34546954), but this workaround should do until the problem is resolved.
+        //
+        preserveTypingAttributesForInsertion {
+            super.insertText(text)
+        }
 
         ensureRemovalOfSingleLineParagraphAttributesAfterPressingEnter(input: text)
 
@@ -421,11 +473,14 @@ open class TextView: UITextView {
 
         ensureRemovalOfParagraphStylesBeforeRemovingCharacter(at: selectedRange)
 
-        super.deleteBackward()
+        preserveTypingAttributesForDeletion {
+            super.deleteBackward()
+        }
 
         ensureRemovalOfParagraphAttributesWhenPressingBackspaceAndEmptyingTheDocument()
         ensureCursorRedraw(afterEditing: deletedString.string)
-        delegate?.textViewDidChange?(self)
+
+        notifyTextViewDidChange()
     }
 
     // MARK: - UIView Overrides
@@ -436,19 +491,25 @@ open class TextView: UITextView {
     }
 
     // MARK: - UITextView Overrides
-
+    
     open override func caretRect(for position: UITextPosition) -> CGRect {
-        let characterIndex = offset(from: beginningOfDocument, to: position)
         var caretRect = super.caretRect(for: position)
+        let characterIndex = offset(from: beginningOfDocument, to: position)
+        
         guard layoutManager.isValidGlyphIndex(characterIndex) else {
             return caretRect
         }
+        
         let glyphIndex = layoutManager.glyphIndexForCharacter(at: characterIndex)
         let usedLineFragment = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphIndex, effectiveRange: nil)
-        if !usedLineFragment.isEmpty {
-            caretRect.origin.y = usedLineFragment.origin.y + textContainerInset.top
-            caretRect.size.height = usedLineFragment.size.height
+        
+        guard !usedLineFragment.isEmpty else {
+            return caretRect
         }
+     
+        caretRect.origin.y = usedLineFragment.origin.y + textContainerInset.top
+        caretRect.size.height = usedLineFragment.size.height
+
         return caretRect
     }
 
@@ -484,13 +545,13 @@ open class TextView: UITextView {
         //
         font = defaultFont
         
-        storage.setHTML(processedHTML, withDefaultFontDescriptor: font!.fontDescriptor)
+        storage.setHTML(processedHTML, defaultAttributes: defaultAttributes)
 
         if storage.length > 0 && selectedRange.location < storage.length {
             typingAttributes = storage.attributes(at: selectedRange.location, effectiveRange: nil)
         }
 
-        delegate?.textViewDidChange?(self)
+        notifyTextViewDidChange()
         formattingDelegate?.textViewCommandToggledAStyle()
     }
 
@@ -639,7 +700,7 @@ open class TextView: UITextView {
             let location = max(0,min(selectedRange.location, textStorage.length-1))
             typingAttributes = textStorage.attributes(at: location, effectiveRange: nil)
         }
-        delegate?.textViewDidChange?(self)
+        notifyTextViewDidChange()
     }
 
     /// Adds or removes a bold style from the specified range.
@@ -761,13 +822,6 @@ open class TextView: UITextView {
         let line = LineAttachment()
         replace(at: range, with: line)
     }
-
-    fileprivate lazy var defaultAttributes: [String: Any] = {
-        return [
-            NSFontAttributeName: self.defaultFont,
-            NSParagraphStyleAttributeName: ParagraphStyle.default
-        ]
-    }()
 
     private lazy var paragraphFormatters: [AttributeFormatter] = [
         BlockquoteFormatter(),
@@ -908,7 +962,6 @@ open class TextView: UITextView {
     func forceRedrawCursorAfterDelay() {
         let delay = 0.05
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            let beforeTypingAttributes = self.typingAttributes
             let pristine = self.selectedRange
             let maxLength = self.storage.length
 
@@ -919,15 +972,115 @@ open class TextView: UITextView {
             let delta = pristine.location == maxLength ? -1 : 1
             let location = min(max(pristine.location + delta, 0), maxLength)
 
-            // Shift the SelectedRange to a nearby position: *FORCE* cursor redraw
+            // Yes. This is a Workaround on top of another workaround.
+            // WARNING: The universe may fade out of existance.
             //
-            self.selectedRange = NSMakeRange(location, 0)
+            self.preserveTypingAttributesForInsertion {
 
-            // Finally, restore the original SelectedRange and the typingAttributes we had before beginning
-            //
-            self.selectedRange = pristine
-            self.typingAttributes = beforeTypingAttributes
+                // Shift the SelectedRange to a nearby position: *FORCE* cursor redraw
+                //
+                self.selectedRange = NSMakeRange(location, 0)
+
+                // Finally, restore the original SelectedRange and the typingAttributes we had before beginning
+                //
+                self.selectedRange = pristine
+            }
         }
+    }
+    
+    // MARK: - iOS 11 Workarounds
+    
+    /// This method fixes an issue that was introduced in iOS 11.  Styles were lost when you selected an autocomplete
+    /// suggestion.
+    ///
+    ///
+    ///
+    /// How to remove: if you disable this method and notice that autocomplete suggestions are not losing styles when
+    /// selected, feel free to remove it.
+    ///
+    /// This bug affected at least the range of iOS versions fromS 11.0 to 11.0.3 (both included).
+    ///
+    @objc func replaceRangeWithTextWithoutClosingTyping(_ range: UITextRange, replacementText: String) {
+        
+        // We're only wrapping the call to super in `preserveTypingAttributesForInsertion` to make sure
+        // that the style is not lost due to an iOS 11 issue.
+        //
+        preserveTypingAttributesForInsertion{ [weak self] in
+            guard let `self` = self else {
+                return
+            }
+            
+            // From here on, it's just calling the same method in `super`.
+            //
+            let selector = #selector(TextView.replaceRangeWithTextWithoutClosingTyping(_:replacementText:))
+            let imp = class_getMethodImplementation(self.superclass, selector)
+            
+            typealias ClosureType = @convention(c) (AnyObject, Selector, UITextRange, String) -> Void
+            let superMethod: ClosureType = unsafeBitCast(imp, to: ClosureType.self)
+            
+            superMethod(self, selector, range, replacementText)
+        }
+    }
+
+    /// Workaround: This method preserves the Typing Attributes, and prevents the UITextView's delegate from beign
+    /// called during the `block` execution.
+    ///
+    /// We're implementing this because of a bug in iOS 11, in which Typing Attributes are being lost by methods such as:
+    ///
+    ///     -   `deleteBackwards`
+    ///     -   `insertText`
+    ///     -   Autocompletion!
+    ///
+    /// Reference: https://github.com/wordpress-mobile/AztecEditor-iOS/issues/748
+    ///
+    private func preserveTypingAttributesForInsertion(block: () -> Void) {
+        
+        // We really don't want this code running below iOS 10.
+        guard #available(iOS 11, *) else {
+            block()
+            return
+        }
+        
+        let beforeTypingAttributes = typingAttributes
+        let beforeDelegate = delegate
+
+        delegate = nil
+        block()
+
+        typingAttributes = beforeTypingAttributes
+        delegate = beforeDelegate
+
+        // Manually notify the delegates: We're avoiding overwork!
+        delegate?.textViewDidChangeSelection?(self)
+        notifyTextViewDidChange()
+    }
+
+    /// WORKAROUND: iOS 11 introduced an issue that's causing UITextView to lose it's typing
+    /// attributes under certain circumstances. This method will determine the Typing Attributes based on
+    /// the TextStorage attributes, whenever possible.
+    ///
+    /// Issue: https://github.com/wordpress-mobile/AztecEditor-iOS/issues/749
+    ///
+    private func preserveTypingAttributesForDeletion(block: () -> Void) {
+        
+        // We really don't want this code running below iOS 10.
+        guard #available(iOS 11, *) else {
+            block()
+            return
+        }
+        
+        let document = textStorage.string
+        guard selectedRange.location == document.characters.count, document.characters.count > 0 else {
+            block()
+            return
+        }
+
+        let previousLocation = max(selectedRange.location - 1, 0)
+        let previousAttributes = textStorage.attributes(at: previousLocation, effectiveRange: nil)
+
+        block()
+
+        typingAttributes = previousAttributes
     }
 
 
@@ -958,7 +1111,7 @@ open class TextView: UITextView {
 
         selectedRange = NSRange(location: finalRange.location + finalRange.length, length: 0)
 
-        delegate?.textViewDidChange?(self)
+        notifyTextViewDidChange()
     }
 
     /// Adds a link to the designated url on the specified range.
@@ -983,7 +1136,7 @@ open class TextView: UITextView {
     open func removeLink(inRange range: NSRange) {
         let formatter = LinkFormatter()
         formatter.toggle(in: storage, at: range)
-        delegate?.textViewDidChange?(self)
+        notifyTextViewDidChange()
     }
 
 
@@ -999,7 +1152,7 @@ open class TextView: UITextView {
         let attachmentString = NSAttributedString(attachment: attachment, attributes: typingAttributes)        
         storage.replaceCharacters(in: range, with: attachmentString)
         selectedRange = NSMakeRange(range.location + NSAttributedString.lengthOfTextAttachment, 0)
-        delegate?.textViewDidChange?(self)
+        notifyTextViewDidChange()
     }
 
     /// Replaces with an image attachment at the specified range
@@ -1046,14 +1199,14 @@ open class TextView: UITextView {
         })
 
         storage.replaceCharacters(in: range, with: NSAttributedString(string: "", attributes: typingAttributes))
-        delegate?.textViewDidChange?(self)
+        notifyTextViewDidChange()
     }
 
     /// Removes all of the text attachments contained within the storage
     ///
     open func removeMediaAttachments() {
         storage.removeMediaAttachments()
-        delegate?.textViewDidChange?(self)
+        notifyTextViewDidChange()
     }
 
     /// Replaces a Video attachment at the specified range
@@ -1444,7 +1597,7 @@ private extension TextView {
     ///
     private func mustRemoveParagraphAttributesAfterSelectionChange() -> Bool {
         return selectedRange.location == storage.length
-            && storage.string.isEmptyLine(at: selectedRange.location)
+            && storage.string.isEmptyParagraph(at: selectedRange.location)
     }
 
     /// Removes the Paragraph Attributes [Blockquote, Pre, Lists] at the specified range. If the range
@@ -1494,7 +1647,7 @@ extension TextView: TextStorageAttachmentsDelegate {
         return textAttachmentDelegate.textView(self, placeholderFor: attachment)
     }
     
-    func storage(_ storage: TextStorage, urlFor imageAttachment: ImageAttachment) -> URL {
+    func storage(_ storage: TextStorage, urlFor imageAttachment: ImageAttachment) -> URL? {
         guard let textAttachmentDelegate = textAttachmentDelegate else {
             fatalError("This class requires a text attachment delegate to be set.")
         }
@@ -1547,9 +1700,17 @@ extension TextView: TextStorageAttachmentsDelegate {
         return true
     }
 
-    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard let textView = textView else {
+            return false
+        }
 
-        guard let textView = self.textView else {
+        let locationInTextView = touch.location(in: textView)
+        return textView.attachmentAtPoint(locationInTextView) != nil
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let textView = textView else {
             return false
         }
 
@@ -1565,9 +1726,8 @@ extension TextView: TextStorageAttachmentsDelegate {
     }
 
     func richTextViewWasPressed(_ recognizer: UIGestureRecognizer) {
-        guard let textView = self.textView,
-            recognizer.state == .recognized else {
-                return
+        guard let textView = textView, recognizer.state == .recognized else {
+            return
         }
 
         let locationInTextView = recognizer.location(in: textView)
@@ -1618,7 +1778,7 @@ private extension TextView {
             self?.undoTextReplacement(of: originalString, finalRange: finalRange)
         })
 
-        delegate?.textViewDidChange?(self)
+        notifyTextViewDidChange()
     }
 
     func undoTextReplacement(of originalText: NSAttributedString, finalRange: NSRange) {
@@ -1633,6 +1793,6 @@ private extension TextView {
             self?.undoTextReplacement(of: redoOriginalText, finalRange: redoFinalRange)
         })
 
-        delegate?.textViewDidChange?(self)
+        notifyTextViewDidChange()
     }
 }

@@ -3,25 +3,23 @@ import Foundation
 /// Represents a basic attribute with no value.  This is also the base class for all other
 /// attributes.
 ///
-class Attribute: NSObject, CustomReflectable {
+class Attribute: NSObject, CustomReflectable, NSCoding {
 
     // MARK: - Attribute Definition Properties
 
     let name: String
     var value: Value
-    
+
+    // MARK: - CSS Support
+
+    let cssAttributeName = "style"
+
     // MARK: - Initializers
     
     init(name: String, value: Value = .none) {
         self.name = name
         self.value = value
     }
-
-    init(name: String, string: String?) {
-        self.name = name
-        self.value = Value(for: string)
-    }
-
 
     // MARK: - CustomReflectable
 
@@ -39,14 +37,31 @@ class Attribute: NSObject, CustomReflectable {
 
     // MARK: - NSCoding
 
+    struct Keys {
+        static let name = "name"
+        static let value = "value"
+    }
+
     public required convenience init?(coder aDecoder: NSCoder) {
+        // TODO: This is a Work in Progress. Let's also get Attribute conforming to Codable!
         guard let name = aDecoder.decodeObject(forKey: Keys.name) as? String,
-            let valueAsString = aDecoder.decodeObject(forKey: Keys.value) as? String?
-        else {
-            fatalError()
+            let rawValue = aDecoder.decodeObject(forKey: Keys.value) as? Data,
+            let value = try? JSONDecoder().decode(Value.self, from: rawValue) else
+        {
+            assertionFailure("Review the logic.")
+            return nil
         }
 
-        self.init(name: name, string: valueAsString)
+        self.init(name: name, value: value)
+    }
+
+    open func encode(with aCoder: NSCoder) {
+        aCoder.encode(name, forKey: Keys.name)
+
+        // TODO: This is a Work in Progress. Let's also get Attribute conforming to Codable!
+        if let encodedValue = try? JSONEncoder().encode(value) {
+            aCoder.encode(encodedValue, forKey: Keys.value)
+        }
     }
 
     // MARK: - Equatable
@@ -73,56 +88,37 @@ class Attribute: NSObject, CustomReflectable {
 }
 
 
-// MARK: - NSCoding Conformance
-//
-extension Attribute: NSCoding {
-
-    struct Keys {
-        static let name = "name"
-        static let value = "value"
-    }
-
-    open func encode(with aCoder: NSCoder) {
-        aCoder.encode(name, forKey: Keys.name)
-        aCoder.encode(value.toString(), forKey: Keys.value)
-    }
-}
-
-
 // MARK: - Attribute.Value
 
 extension Attribute {
+
 
     /// Allowed attribute values
     ///
     enum Value: Equatable, Hashable {
         case none
         case string(String)
-        case inlineCss([CSSProperty])
-
-
-        // MARK: - Constants
-
-        static let cssPropertySeparator = "; "
-
+        case inlineCss([CSSAttribute])
 
         // MARK: - Initializers
 
-        init(for string: String?) {
-            let components = string?.components(separatedBy: Value.cssPropertySeparator) ?? []
-            if components.isEmpty {
+        init(withCSSString cssString: String) {
+
+            let components = cssString.components(separatedBy: CSSParser.attributeSeparator)
+
+            guard !components.isEmpty else {
                 self = .none
                 return
             }
 
-            let properties = components.flatMap { CSSProperty(for: $0) }
-            if !properties.isEmpty {
-                self = .inlineCss(properties)
+            let properties = components.flatMap { CSSAttribute(for: $0) }
+
+            guard !properties.isEmpty else {
+                self = .string(cssString)
                 return
             }
 
-            let first = components.first ?? String()
-            self = .string(first)
+            self = .inlineCss(properties)
         }
 
 
@@ -134,13 +130,10 @@ extension Attribute {
                 return 0
             case .string(let string):
                 return string.hashValue
-            case .inlineCss(let cssProperties):
-                var hash = 0
-                for property in cssProperties {
-                    hash ^= property.hashValue
-                }
-
-                return hash
+            case .inlineCss(let cssAttributes):
+                return cssAttributes.reduce(0, { (previous, cssAttribute) -> Int in
+                    return previous ^ cssAttribute.hashValue
+                })
             }
         }
 
@@ -171,11 +164,11 @@ extension Attribute {
             }
         }
 
-        static func ==(lValue: Value, rProperties: [CSSProperty]) -> Bool {
+        static func ==(lValue: Value, rProperties: [CSSAttribute]) -> Bool {
             return rProperties == lValue
         }
 
-        static func ==(lProperties: [CSSProperty], rValue: Value) -> Bool {
+        static func ==(lProperties: [CSSAttribute], rValue: Value) -> Bool {
             switch(rValue) {
             case .inlineCss(let rProperties):
                 return lProperties == rProperties
@@ -200,12 +193,63 @@ extension Attribute {
                     result += property.toString()
 
                     if index < properties.count - 1 {
-                        result += Value.cssPropertySeparator
+                        result += CSSParser.attributeSeparator + " "
                     }
                 }
                 
                 return result
             }
+        }
+    }
+}
+
+
+// MARK: - Attribute.Value Codable Conformance
+//
+extension Attribute.Value: Codable {
+
+    enum CodingError: Error {
+        case missingTypeKey
+    }
+
+    private enum ValueKey: String, CodingKey {
+        case none
+        case string
+        case inlineCss
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: ValueKey.self)
+
+        guard let rootKey = values.allKeys.first, let valueKind = ValueKey(rawValue: rootKey.rawValue) else {
+            throw CodingError.missingTypeKey
+        }
+
+        switch valueKind {
+        case .none:
+            // IMPORTANT: the `Value` prefix serves as disambiguation, since optionals also have
+            // a .none value!!!  Don't remove it!
+            //
+            self = Attribute.Value.none
+        case .string:
+            let string = try? values.decode(String.self, forKey: .string)
+            self = .string(string ?? "")
+        case .inlineCss:
+            let attributes = try? values.decode([CSSAttribute].self, forKey: .inlineCss)
+            self = .inlineCss(attributes ?? [])
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: ValueKey.self)
+
+        switch self {
+        case .none:
+            try container.encodeNil(forKey: .none)
+        case .string(let string):
+            try container.encode(string, forKey: .string)
+        case .inlineCss(let attributes):
+            try container.encode(attributes, forKey: .inlineCss)
         }
     }
 }

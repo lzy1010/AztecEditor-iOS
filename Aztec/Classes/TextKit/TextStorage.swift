@@ -39,9 +39,9 @@ protocol TextStorageAttachmentsDelegate: class {
     ///     - storage: The storage that is requesting the image.
     ///     - imageAttachment: The image that was added to the storage.
     ///
-    /// - Returns: the requested `NSURL` where the image is stored.
+    /// - Returns: the requested `URL` where the image is stored, or nil if it's not yet available.
     ///
-    func storage(_ storage: TextStorage, urlFor imageAttachment: ImageAttachment) -> URL
+    func storage(_ storage: TextStorage, urlFor imageAttachment: ImageAttachment) -> URL?
 
     /// Called when a attachment is removed from the storage.
     ///
@@ -79,17 +79,28 @@ protocol TextStorageAttachmentsDelegate: class {
 ///
 open class TextStorage: NSTextStorage {
 
+    // MARK: - Storage
+
     fileprivate var textStore = NSMutableAttributedString(string: "", attributes: nil)
-    
-    // MARK: - NSTextStorage
+
+
+    // MARK: - Delegates
+
+    /// NOTE:
+    /// `attachmentsDelegate` is an optional property. On purpose. During a Drag and Drop OP, the
+    /// LayoutManager may instantiate an entire TextKit stack. Since there is absolutely no entry point
+    /// in which we may set this delegate, we need to set it as optional.
+    ///
+    /// Ref. https://github.com/wordpress-mobile/AztecEditor-iOS/issues/727
+    ///
+    weak var attachmentsDelegate: TextStorageAttachmentsDelegate?
+
+
+    // MARK: - Calculated Properties
 
     override open var string: String {
         return textStore.string
     }
-
-    // MARK: - Attachments
-
-    weak var attachmentsDelegate: TextStorageAttachmentsDelegate!
 
     open var mediaAttachments: [MediaAttachment] {
         let range = NSMakeRange(0, length)
@@ -102,6 +113,9 @@ open class TextStorage: NSTextStorage {
 
         return attachments
     }
+
+
+    // MARK: - Range Methods
 
     func range<T : NSTextAttachment>(for attachment: T) -> NSRange? {
         var range: NSRange?
@@ -135,7 +149,12 @@ open class TextStorage: NSTextStorage {
     /// - Returns: the preprocessed string.
     ///
     fileprivate func preprocessAttachmentsForInsertion(_ attributedString: NSAttributedString) -> NSAttributedString {
-        assert(attachmentsDelegate != nil)
+        // Ref. https://github.com/wordpress-mobile/AztecEditor-iOS/issues/727:
+        // If the delegate is not set, we *Explicitly* do not want to crash here.
+        //
+        guard let delegate = attachmentsDelegate else {
+            return attributedString
+        }
 
         let fullRange = NSRange(location: 0, length: attributedString.length)
         let finalString = NSMutableAttributedString(attributedString: attributedString)
@@ -170,11 +189,11 @@ open class TextStorage: NSTextStorage {
                     return
                 }
 
-                let replacementAttachment = ImageAttachment(identifier: NSUUID.init().uuidString)
+                let replacementAttachment = ImageAttachment(identifier: NSUUID().uuidString)
                 replacementAttachment.delegate = self
                 replacementAttachment.image = image
 
-                let imageURL = attachmentsDelegate.storage(self, urlFor: replacementAttachment)
+                let imageURL = delegate.storage(self, urlFor: replacementAttachment)
                 replacementAttachment.updateURL(imageURL)
 
                 finalString.addAttribute(NSAttachmentAttributeName, value: replacementAttachment, range: range)
@@ -184,9 +203,16 @@ open class TextStorage: NSTextStorage {
         return finalString
     }
 
-    fileprivate func detectAttachmentRemoved(in range:NSRange) {
+    fileprivate func detectAttachmentRemoved(in range: NSRange) {
+        // Ref. https://github.com/wordpress-mobile/AztecEditor-iOS/issues/727:
+        // If the delegate is not set, we *Explicitly* do not want to crash here.
+        //
+        guard let delegate = attachmentsDelegate else {
+            return
+        }
+
         textStore.enumerateAttachmentsOfType(MediaAttachment.self, range: range) { (attachment, range, stop) in
-            self.attachmentsDelegate.storage(self, deletedAttachmentWith: attachment.identifier)
+            delegate.storage(self, deletedAttachmentWith: attachment.identifier)
         }
     }
 
@@ -231,10 +257,12 @@ open class TextStorage: NSTextStorage {
         endEditing()
     }
 
-    override open func setAttributes(_ attrs: [String : Any]?, range: NSRange) {
+    override open func setAttributes(_ attrs: [String: Any]?, range: NSRange) {
         beginEditing()
 
-        textStore.setAttributes(attrs, range: range)
+        let fixedAttributes = ensureMatchingFontAndParagraphHeaderStyles(beforeApplying: attrs ?? [:], at: range)
+
+        textStore.setAttributes(fixedAttributes, range: range)
         edited(.editedAttributes, range: range, changeInLength: 0)
         
         endEditing()
@@ -313,11 +341,11 @@ open class TextStorage: NSTextStorage {
 
     }
 
-    func setHTML(_ html: String, withDefaultFontDescriptor defaultFontDescriptor: UIFontDescriptor) {
+    func setHTML(_ html: String, defaultAttributes: [String: Any]) {
 
         let originalLength = textStore.length
 
-        textStore = NSMutableAttributedString(withHTML: html, usingDefaultFontDescriptor: defaultFontDescriptor)
+        textStore = NSMutableAttributedString(withHTML: html, defaultAttributes: defaultAttributes)
 
         textStore.enumerateAttachmentsOfType(ImageAttachment.self) { [weak self] (attachment, _, _) in
             attachment.delegate = self
@@ -337,13 +365,58 @@ open class TextStorage: NSTextStorage {
 }
 
 
+// MARK: - Header Font Attribute Fixes
+//
+private extension TextStorage {
+
+    /// Ensures the font style is consistent with the paragraph header style that's about to be applied.
+    ///
+    /// - Parameters:
+    ///   - attrs: NSAttributedString attributes that are about to be applied.
+    ///   - range: Range that's about to be affected by the new Attributes collection.
+    ///
+    /// - Returns: Collection of attributes with the Font Attribute corrected, if needed.
+    ///
+    func ensureMatchingFontAndParagraphHeaderStyles(beforeApplying attrs: [String: Any], at range: NSRange) -> [String: Any] {
+        let newStyle = attrs[NSParagraphStyleAttributeName] as? ParagraphStyle
+        let oldStyle = textStore.attribute(NSParagraphStyleAttributeName, at: range.location, effectiveRange: nil) as? ParagraphStyle
+
+        let newLevel = newStyle?.headers.last?.level ?? .none
+        let oldLevel = oldStyle?.headers.last?.level ?? .none
+
+        guard oldLevel != newLevel else {
+            return attrs
+        }
+
+        return fixFontAttribute(in: attrs, headerLevel: newLevel)
+    }
+
+    /// This helper re-applies the HeaderFormatter to the specified collection of attributes, so that the Font Attribute is explicitly set,
+    /// and it matches the target HeaderLevel.
+    ///
+    /// - Parameters:
+    ///   - attrs: NSAttributedString attributes that are about to be applied.
+    ///   - headerLevel: HeaderLevel specified by the ParagraphStyle, associated to the application range.
+    ///
+    /// - Returns: Collection of attributes with the Font Attribute corrected, so that it matches the specified HeaderLevel.
+    ///
+    private func fixFontAttribute(in attrs: [String: Any], headerLevel: Header.HeaderType) ->  [String: Any] {
+        let formatter = HeaderFormatter(headerLevel: headerLevel)
+        return formatter.apply(to: attrs)
+    }
+}
+
+
 // MARK: - TextStorage: MediaAttachmentDelegate Methods
 //
 extension TextStorage: MediaAttachmentDelegate {
 
     func mediaAttachmentPlaceholderImageFor(attachment: MediaAttachment) -> UIImage {
-        assert(attachmentsDelegate != nil)
-        return attachmentsDelegate.storage(self, placeholderFor: attachment)
+        guard let delegate = attachmentsDelegate else {
+            fatalError()
+        }
+
+        return delegate.storage(self, placeholderFor: attachment)
     }
 
     func mediaAttachment(
@@ -352,8 +425,11 @@ extension TextStorage: MediaAttachmentDelegate {
         onSuccess success: @escaping (UIImage) -> (),
         onFailure failure: @escaping () -> ())
     {
-        assert(attachmentsDelegate != nil)
-        attachmentsDelegate.storage(self, attachment: mediaAttachment, imageFor: url, onSuccess: success, onFailure: failure)
+        guard let delegate = attachmentsDelegate else {
+            fatalError()
+        }
+
+        delegate.storage(self, attachment: mediaAttachment, imageFor: url, onSuccess: success, onFailure: failure)
     }
 }
 
@@ -363,8 +439,11 @@ extension TextStorage: MediaAttachmentDelegate {
 extension TextStorage: VideoAttachmentDelegate {
 
     func videoAttachmentPlaceholderImageFor(attachment: VideoAttachment) -> UIImage {
-        assert(attachmentsDelegate != nil)
-        return attachmentsDelegate.storage(self, placeholderFor: attachment)
+        guard let delegate = attachmentsDelegate else {
+            fatalError()
+        }
+
+        return delegate.storage(self, placeholderFor: attachment)
     }
 
     func videoAttachment(
@@ -373,8 +452,11 @@ extension TextStorage: VideoAttachmentDelegate {
         onSuccess success: @escaping (UIImage) -> (),
         onFailure failure: @escaping () -> ())
     {
-        assert(attachmentsDelegate != nil)
-        attachmentsDelegate.storage(self, attachment: videoAttachment, imageFor: url, onSuccess: success, onFailure: failure)
+        guard let delegate = attachmentsDelegate else {
+            fatalError()
+        }
+
+        delegate.storage(self, attachment: videoAttachment, imageFor: url, onSuccess: success, onFailure: failure)
     }
 }
 
@@ -385,12 +467,18 @@ extension TextStorage: VideoAttachmentDelegate {
 extension TextStorage: RenderableAttachmentDelegate {
 
     func attachment(_ attachment: NSTextAttachment, imageForSize size: CGSize) -> UIImage? {
-        assert(attachmentsDelegate != nil)
-        return attachmentsDelegate.storage(self, imageFor: attachment, with: size)
+        guard let delegate = attachmentsDelegate else {
+            fatalError()
+        }
+
+        return delegate.storage(self, imageFor: attachment, with: size)
     }
 
     func attachment(_ attachment: NSTextAttachment, boundsForLineFragment fragment: CGRect) -> CGRect {
-        assert(attachmentsDelegate != nil)
-        return attachmentsDelegate.storage(self, boundsFor: attachment, with: fragment)
+        guard let delegate = attachmentsDelegate else {
+            fatalError()
+        }
+
+        return delegate.storage(self, boundsFor: attachment, with: fragment)
     }
 }

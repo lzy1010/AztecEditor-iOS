@@ -16,7 +16,15 @@ class EditorDemoController: UIViewController {
     }()
 
     fileprivate(set) lazy var richTextView: Aztec.TextView = {
-        let textView = Aztec.TextView(defaultFont: Constants.defaultContentFont, defaultMissingImage: Constants.defaultMissingImage)
+
+        let paragraphStyle = Aztec.ParagraphStyle.default
+        
+        // This is where you'd normally customize paragraphStyle's values.
+        
+        let textView = Aztec.TextView(
+            defaultFont: Constants.defaultContentFont,
+            defaultParagraphStyle: paragraphStyle,
+            defaultMissingImage: Constants.defaultMissingImage)
 
         textView.inputProcessor =
             PipelineProcessor([CaptionShortcodePreProcessor(),
@@ -34,6 +42,10 @@ class EditorDemoController: UIViewController {
         textView.formattingDelegate = self
         textView.textAttachmentDelegate = self
         textView.accessibilityIdentifier = "richContentView"
+
+        if #available(iOS 11, *) {
+            textView.smartDashesType = .no
+        }
 
         return textView
     }()
@@ -56,6 +68,10 @@ class EditorDemoController: UIViewController {
         textView.accessibilityIdentifier = "HTMLContentView"
         textView.autocorrectionType = .no
         textView.autocapitalizationType = .none
+
+        if #available(iOS 11, *) {
+            textView.smartDashesType = .no
+        }
 
         return textView
     }()
@@ -145,7 +161,6 @@ class EditorDemoController: UIViewController {
         edgesForExtendedLayout = UIRectEdge()
         navigationController?.navigationBar.isTranslucent = false
 
-
         view.backgroundColor = .white
         view.addSubview(richTextView)
         view.addSubview(htmlTextView)
@@ -191,7 +206,6 @@ class EditorDemoController: UIViewController {
 
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
-
         dismissOptionsViewControllerIfNecessary()
     }
 
@@ -207,9 +221,9 @@ class EditorDemoController: UIViewController {
     
     func updateTitleHeight() {
         let referenceView: UIScrollView = editingMode == .richText ? richTextView : htmlTextView
-
-        let sizeThatShouldFitTheContent = titleTextField.sizeThatFits(CGSize(width:view.frame.width - ( 2 * Constants.margin), height: CGFloat.greatestFiniteMagnitude))
+        let layoutMargins = view.layoutMargins
         let insets = titleTextField.textContainerInset
+        let sizeThatShouldFitTheContent = titleTextField.sizeThatFits(CGSize(width:view.frame.width - (insets.left + insets.right + layoutMargins.left + layoutMargins.right), height: CGFloat.greatestFiniteMagnitude))
         titleHeightConstraint.constant = max(sizeThatShouldFitTheContent.height, titleTextField.font!.lineHeight + insets.top + insets.bottom)
 
         var contentInset = referenceView.contentInset
@@ -223,46 +237,55 @@ class EditorDemoController: UIViewController {
     }
 
     // MARK: - Configuration Methods
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+
+        var safeInsets = self.view.layoutMargins
+        safeInsets.top = richTextView.textContainerInset.top
+        richTextView.textContainerInset = safeInsets
+        htmlTextView.textContainerInset = safeInsets
+    }
 
     private func configureConstraints() {
 
         titleHeightConstraint = titleTextField.heightAnchor.constraint(equalToConstant: titleTextField.font!.lineHeight)
         titleTopConstraint = titleTextField.topAnchor.constraint(equalTo: view.topAnchor, constant: -richTextView.contentOffset.y)
         updateTitleHeight()
+        let layoutGuide = view.layoutMarginsGuide
+
         NSLayoutConstraint.activate([
-            titleTextField.leftAnchor.constraint(equalTo: view.leftAnchor, constant: Constants.margin),
-            titleTextField.rightAnchor.constraint(equalTo: view.rightAnchor, constant: -Constants.margin),
+            titleTextField.leadingAnchor.constraint(equalTo: layoutGuide.leadingAnchor, constant: 0),
+            titleTextField.trailingAnchor.constraint(equalTo: layoutGuide.trailingAnchor, constant: 0),
             titleTopConstraint,
             titleHeightConstraint
             ])
 
         let insets = titleTextField.textContainerInset
         NSLayoutConstraint.activate([
-            titlePlaceholderLabel.leftAnchor.constraint(equalTo: titleTextField.leftAnchor, constant: insets.left + titleTextField.textContainer.lineFragmentPadding),
-            titlePlaceholderLabel.rightAnchor.constraint(equalTo: titleTextField.rightAnchor, constant: -insets.right),
+            titlePlaceholderLabel.leadingAnchor.constraint(equalTo: titleTextField.leadingAnchor, constant: insets.left + titleTextField.textContainer.lineFragmentPadding),
+            titlePlaceholderLabel.trailingAnchor.constraint(equalTo: titleTextField.trailingAnchor, constant: -insets.right),
             titlePlaceholderLabel.topAnchor.constraint(equalTo: titleTextField.topAnchor, constant: insets.top),
             titlePlaceholderLabel.heightAnchor.constraint(equalToConstant: titleTextField.font!.lineHeight)
             ])
-
         NSLayoutConstraint.activate([
-            separatorView.leftAnchor.constraint(equalTo: view.leftAnchor, constant: Constants.margin),
-            separatorView.rightAnchor.constraint(equalTo: view.rightAnchor, constant: -Constants.margin),
+            separatorView.leadingAnchor.constraint(equalTo: layoutGuide.leadingAnchor, constant: 0),
+            separatorView.trailingAnchor.constraint(equalTo: layoutGuide.trailingAnchor, constant: 0),
             separatorView.topAnchor.constraint(equalTo: titleTextField.bottomAnchor, constant: 0),
             separatorView.heightAnchor.constraint(equalToConstant: separatorView.frame.height)
             ])
 
         NSLayoutConstraint.activate([
-            richTextView.leftAnchor.constraint(equalTo: view.leftAnchor),
-            richTextView.rightAnchor.constraint(equalTo: view.rightAnchor),
-            richTextView.topAnchor.constraint(equalTo: view.topAnchor, constant: 0),
-            richTextView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -Constants.margin)
+            richTextView.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
+            richTextView.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
+            richTextView.topAnchor.constraint(equalTo: layoutGuide.topAnchor, constant: 0),
+            richTextView.bottomAnchor.constraint(equalTo: self.view.bottomAnchor, constant: 0)
             ])
 
         NSLayoutConstraint.activate([
-            htmlTextView.leftAnchor.constraint(equalTo: richTextView.leftAnchor),
-            htmlTextView.rightAnchor.constraint(equalTo: richTextView.rightAnchor),
+            htmlTextView.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
+            htmlTextView.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
             htmlTextView.topAnchor.constraint(equalTo: richTextView.topAnchor),
-            htmlTextView.bottomAnchor.constraint(equalTo: richTextView.bottomAnchor),
+            htmlTextView.bottomAnchor.constraint(equalTo: self.view.bottomAnchor),
             ])
     }
 
@@ -273,13 +296,11 @@ class EditorDemoController: UIViewController {
         textView.keyboardDismissMode = .interactive
         textView.textColor = UIColor.darkText
         textView.translatesAutoresizingMaskIntoConstraints = false
-        textView.textContainerInset.left = Constants.margin
-        textView.textContainerInset.right = Constants.margin
     }
 
     private func registerAttachmentImageProviders() {
         let providers: [TextViewAttachmentImageProvider] = [
-            MoreAttachmentRenderer(),
+            SpecialTagAttachmentRenderer(),
             CommentAttachmentRenderer(font: Constants.defaultContentFont),
             HTMLAttachmentRenderer(font: Constants.defaultHtmlFont)
         ]
@@ -333,8 +354,8 @@ class EditorDemoController: UIViewController {
     fileprivate func refreshInsets(forKeyboardFrame keyboardFrame: CGRect) {
         let referenceView: UIScrollView = editingMode == .richText ? richTextView : htmlTextView
 
-        let scrollInsets = UIEdgeInsets(top: referenceView.scrollIndicatorInsets.top, left: 0, bottom: view.frame.maxY - keyboardFrame.minY, right: 0)
-        let contentInset = UIEdgeInsets(top: referenceView.contentInset.top, left: 0, bottom: view.frame.maxY - keyboardFrame.minY, right: 0)
+        let scrollInsets = UIEdgeInsets(top: referenceView.scrollIndicatorInsets.top, left: 0, bottom: view.frame.maxY - (keyboardFrame.minY + self.view.layoutMargins.bottom), right: 0)
+        let contentInset = UIEdgeInsets(top: referenceView.contentInset.top, left: 0, bottom: view.frame.maxY - (keyboardFrame.minY + self.view.layoutMargins.bottom), right: 0)
 
         htmlTextView.scrollIndicatorInsets = scrollInsets
         htmlTextView.contentInset = contentInset
@@ -348,8 +369,9 @@ class EditorDemoController: UIViewController {
         guard let toolbar = richTextView.inputAccessoryView as? Aztec.FormatBar else {
             return
         }
-        var identifiers = [FormattingIdentifier]()
-        if (richTextView.selectedRange.length > 0) {
+
+        let identifiers: [FormattingIdentifier]
+        if richTextView.selectedRange.length > 0 {
             identifiers = richTextView.formatIdentifiersSpanningRange(richTextView.selectedRange)
         } else {
             identifiers = richTextView.formatIdentifiersForTypingAttributes()
@@ -565,7 +587,7 @@ extension EditorDemoController {
     func toggleHeader(fromItem item: FormatBarItem) {
         let headerOptions = Constants.headers.map { headerType -> OptionsTableViewOption in
             let attributes = [
-                NSFontAttributeName: UIFont.systemFont(ofSize: headerType.fontSize)
+                NSFontAttributeName: UIFont.systemFont(ofSize: CGFloat(headerType.fontSize))
             ]
 
             let title = NSAttributedString(string: headerType.description, attributes: attributes)
@@ -696,9 +718,9 @@ extension EditorDemoController {
         if richTextView.inputView == to {
             return
         }
-        richTextView.resignFirstResponder()
+
         richTextView.inputView = to
-        richTextView.becomeFirstResponder()
+        richTextView.reloadInputViews()
     }
 
     func headerLevelForSelectedText() -> Header.HeaderType {
@@ -911,6 +933,7 @@ extension EditorDemoController {
         toolbar.overflowToggleIcon = Gridicon.iconOfType(.ellipsis)
         toolbar.overflowToggleIcon?.accessibilityIdentifier = "formatToolbarOverflowToggle"
         toolbar.frame = CGRect(x: 0, y: 0, width: view.frame.width, height: 44.0)
+        toolbar.autoresizingMask = [ .flexibleHeight ]
         toolbar.formatter = self
 
         toolbar.leadingItem = mediaItem
@@ -973,7 +996,7 @@ extension EditorDemoController {
 
 extension EditorDemoController: TextViewAttachmentDelegate {
 
-    func textView(_ textView: TextView, attachment: NSTextAttachment, imageAt url: URL, onSuccess success: @escaping (UIImage) -> Void, onFailure failure: @escaping (Void) -> Void) {
+    func textView(_ textView: TextView, attachment: NSTextAttachment, imageAt url: URL, onSuccess success: @escaping (UIImage) -> Void, onFailure failure: @escaping () -> Void) {
 
         let task = URLSession.shared.dataTask(with: url) { [weak self] (data, _, error) in
             DispatchQueue.main.async {
@@ -1012,14 +1035,13 @@ extension EditorDemoController: TextViewAttachmentDelegate {
         return placeholderImage
     }
 
-    func textView(_ textView: TextView, urlFor imageAttachment: ImageAttachment) -> URL {
-        
-        // TODO: start fake upload process
-        if let image = imageAttachment.image {
-            return saveToDisk(image: image)
-        } else {
-            return URL(string: "placeholder://")!
+    func textView(_ textView: TextView, urlFor imageAttachment: ImageAttachment) -> URL? {
+        guard let image = imageAttachment.image else {
+            return nil
         }
+
+        // TODO: start fake upload process
+        return saveToDisk(image: image)
     }
 
     func textView(_ textView: TextView, deletedAttachmentWith attachmentID: String) {
@@ -1328,13 +1350,12 @@ private extension EditorDemoController
 extension EditorDemoController {
 
     struct Constants {
-        static let defaultContentFont   = UIFont.systemFont(ofSize: 16)
+        static let defaultContentFont   = UIFont.systemFont(ofSize: 14)
         static let defaultHtmlFont      = UIFont.systemFont(ofSize: 24)
         static let defaultMissingImage  = Gridicon.iconOfType(.image)
         static let formatBarIconSize    = CGSize(width: 20.0, height: 20.0)
         static let headers              = [Header.HeaderType.none, .h1, .h2, .h3, .h4, .h5, .h6]
-        static let lists                = [TextList.Style.unordered, .ordered]
-        static let margin               = CGFloat(20)
+        static let lists                = [TextList.Style.unordered, .ordered]        
         static let moreAttachmentText   = "more"
     }
 

@@ -24,7 +24,9 @@ class TextViewTests: XCTestCase {
     // MARK: - TextView construction
 
     func createEmptyTextView() -> TextView {
-        let richTextView = Aztec.TextView(defaultFont: UIFont.systemFont(ofSize: 14), defaultMissingImage: UIImage())
+        let richTextView = Aztec.TextView(
+            defaultFont: UIFont.systemFont(ofSize: 14),
+            defaultMissingImage: UIImage())
         richTextView.textAttachmentDelegate = attachmentDelegate
         richTextView.registerAttachmentImageProvider(attachmentDelegate)
         return richTextView
@@ -1409,6 +1411,9 @@ class TextViewTests: XCTestCase {
         XCTAssertEqual(textView.text, Constants.sampleText0 + Constants.sampleText1 + String(.lineFeed) + String(.paragraphSeparator))
     }
 
+
+    // MARK: - Media
+
     func testInsertVideo() {
         let textView = createEmptyTextView()
         let _ = textView.replaceWithVideo(at: NSRange(location:0, length:0), sourceURL: URL(string: "video.mp4")!, posterURL: URL(string: "video.jpg"), placeHolderImage: nil)
@@ -1447,6 +1452,9 @@ class TextViewTests: XCTestCase {
         XCTAssertEqual(textView.getHTML(), "<p><video src=\"newVideo.mp4\" poster=\"video.jpg\" data-wpvideopress=\"ABCDE\"></video></p>")
     }
 
+
+    // MARK: - Comments
+
     /// This test check if the insertion of a Comment Attachment works correctly and the expected tag gets inserted
     ///
     func testInsertComment() {
@@ -1469,6 +1477,9 @@ class TextViewTests: XCTestCase {
 
         XCTAssertEqual(html, "<p><!--some other comment should go here--><!--more--></p>")
     }
+
+
+    // MARK: - HR
 
     /// This test check if the insertion of an horizontal ruler works correctly and the hr tag is inserted
     ///
@@ -1571,6 +1582,9 @@ class TextViewTests: XCTestCase {
         XCTAssertEqual(textView.getHTML(), "<p><img src=\"image.jpg\" class=\"alignnone wp-image-169\" alt=\"Changed Alt\" title=\"Title\"></p>")
     }
 
+
+    // MARK: - Bugfixing
+
     /// This test verifies that the H1 Header does not get lost during the Rich <> Raw transitioning.
     ///
     func testToggleHtmlWithTwoEmptyLineBreaksDoesNotLooseHeaderStyle() {
@@ -1664,4 +1678,102 @@ class TextViewTests: XCTestCase {
         let expected = "<ol><li><ol><li><ol><li><blockquote>First Item</blockquote></li></ol></li></ol></li></ol>"
         XCTAssert(textView.getHTML(prettyPrint: false) == expected)
     }
+
+    /// This test verifies that the `deleteBackward` call does not result in loosing the Typing Attributes.
+    /// Precisely, we'll ensure that the Italics style isn't lost after hitting backspace, and retyping the
+    /// deleted character.
+    ///
+    /// Ref. Issue #749: Loosing Style after hitting Backspace
+    ///
+    func testDeleteBackwardsDoesNotEndUpLoosingItalicsStyle() {
+        let textView = createTextView(withHTML: "")
+
+        textView.toggleBoldface(self)
+        textView.insertText("First Line")
+        textView.insertText("\n")
+
+        textView.toggleItalics(self)
+        textView.insertText("Second")
+
+        let expectedHTML = textView.getHTML(prettyPrint: false)
+        textView.deleteBackward()
+        textView.insertText("d")
+
+        XCTAssertEqual(textView.getHTML(prettyPrint: false), expectedHTML)
+    }
+
+    /// This test verifies that the *ACTUAL* Typing Attributes are retrieved whenever requested from within
+    /// UITextView's `onDidChange` delegate callback.
+    ///
+    /// We're doing this because of (multiple) iOS 11 bugs in which Typing Attributes get lost.
+    ///
+    /// Ref. Issue #748: Format Bar: Active Style gets de-higlighted
+    ///
+    func testActiveStyleDoesNotGetLostWheneverOnDidChangeDelegateMethodIsCalled() {
+        let textView = createTextView(withHTML: "")
+
+        let delegate = TextViewStubDelegate()
+        textView.delegate = delegate
+
+        textView.toggleBoldface(self)
+        textView.insertText("Bold")
+        textView.insertText("\n")
+
+        textView.toggleItalics(self)
+
+        delegate.onDidChange = {
+            let identifiers = textView.formatIdentifiersForTypingAttributes()
+
+            XCTAssert(identifiers.contains(.bold))
+            XCTAssert(identifiers.contains(.italic))
+        }
+
+        textView.insertText("Italics")
+    }
+
+    /// This test verifies that H1 Style doesn't turn rogue, and come back after editing a line of text that
+    /// never had H1 style, to begin with!.
+    ///
+    /// Ref. Issue #747: Zombie H1 Style
+    ///
+    func testHeaderStyleDoesNotComeBackFromNonExistanceWheneverDeleteBackwardResultsInEmptyParagraph() {
+        let textView = createTextView(withHTML: "")
+
+        textView.toggleHeader(.h1, range: textView.selectedRange)
+        textView.insertText("Header")
+        textView.insertText("\n")
+
+        textView.insertText("One Two")
+        textView.insertText("\n")
+
+        textView.insertText("T")
+        textView.deleteBackward()
+
+        textView.insertText("Three")
+
+        let expected = "<h1>Header</h1><p>One Two</p><p>Three</p>"
+        XCTAssert(textView.getHTML(prettyPrint: false) == expected)
+    }
+
+    /// This test verifies that H1 Style doesn't turn rogue (Scenario #2), and come back after editing a line
+    /// of text that never had H1 style, to begin with!.
+    ///
+    /// Ref. Issue #747: Zombie H1 Style
+    ///
+    func testHeaderStyleDoesNotComeBackFromNonExistanceWheneverDeleteBackwardResultsInEmptyParagraphBeforeHeaderStyle() {
+        let textView = createTextView(withHTML: "")
+
+        textView.toggleHeader(.h1, range: textView.selectedRange)
+        textView.insertText("Header")
+        textView.insertText("\n")
+
+        textView.insertText("1")
+        textView.deleteBackward()
+
+        textView.insertText("1")
+
+        let expected = "<h1>Header</h1><p>1</p>"
+        XCTAssert(textView.getHTML(prettyPrint: false) == expected)
+    }
+
 }

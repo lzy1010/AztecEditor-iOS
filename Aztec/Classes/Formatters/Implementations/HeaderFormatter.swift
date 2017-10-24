@@ -43,9 +43,10 @@ open class HeaderFormatter: ParagraphAttributeFormatter {
             newParagraphStyle.replaceProperty(ofType: Header.self, with: header)
         }
 
+        let targetFontSize = headerFontSize(for: headerLevel, defaultSize: defaultSize)
         var resultingAttributes = attributes
         resultingAttributes[NSParagraphStyleAttributeName] = newParagraphStyle
-        resultingAttributes[NSFontAttributeName] = font.withSize(headerLevel.fontSize)
+        resultingAttributes[NSFontAttributeName] = font.withSize(CGFloat(targetFontSize))
 
         return resultingAttributes
     }
@@ -66,7 +67,7 @@ open class HeaderFormatter: ParagraphAttributeFormatter {
         resultingAttributes[NSParagraphStyleAttributeName] = newParagraphStyle
 
         if let font = attributes[NSFontAttributeName] as? UIFont {
-            resultingAttributes[NSFontAttributeName] = font.withSize(header.defaultFontSize)
+            resultingAttributes[NSFontAttributeName] = font.withSize(CGFloat(header.defaultFontSize))
         }
 
         return resultingAttributes
@@ -86,7 +87,7 @@ open class HeaderFormatter: ParagraphAttributeFormatter {
 //
 private extension HeaderFormatter {
 
-    func defaultFontSize(from attributes: [String: Any]) -> CGFloat? {
+    func defaultFontSize(from attributes: [String: Any]) -> Float? {
         if let paragraphStyle = attributes[NSParagraphStyleAttributeName] as? ParagraphStyle,
             let lastHeader = paragraphStyle.headers.last
         {
@@ -94,9 +95,17 @@ private extension HeaderFormatter {
         }
 
         if let font = attributes[NSFontAttributeName] as? UIFont {
-            return font.pointSize
+            return Float(font.pointSize)
         }
 
         return nil
+    }
+
+    func headerFontSize(for type: Header.HeaderType, defaultSize: Float?) -> Float {
+        guard type == .none, let defaultSize = defaultSize else {
+            return type.fontSize
+        }
+
+        return defaultSize
     }
 }
