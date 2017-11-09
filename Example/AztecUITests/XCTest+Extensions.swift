@@ -5,6 +5,7 @@ public struct elementStringIDs {
     static var emptyDemo = "Empty Editor Demo"
 
     // Text Fields
+    static var titleTextField = "Title"
     static var richTextField = "richContentView"
     static var htmlTextField = "HTMLContentView"
 
@@ -38,6 +39,7 @@ public struct elementStringIDs {
 }
 
 extension XCTest {
+
     /**
      Enters text in the rich text field with auto-correction disabled
      - Parameter text: the test to enter into the field
@@ -45,7 +47,18 @@ extension XCTest {
     func enterTextInField(text: String) -> Void {
         let app = XCUIApplication()
         let richTextField = app.textViews[elementStringIDs.richTextField]
-
+        
+        richTextField.typeText(text)
+    }
+    
+    /**
+     Enters text into title field.
+     - Parameter text: the test to enter into the title
+     */
+    func enterTextInTitle(text: String) -> Void {
+        let app = XCUIApplication()
+        let richTextField = app.textViews[elementStringIDs.titleTextField]
+        
         richTextField.typeText(text)
     }
 

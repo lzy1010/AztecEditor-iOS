@@ -223,13 +223,53 @@ class AztecSimpleTextFormattingTests: XCTestCase {
     func testHeadingSixText() {
         enterTextInField(text: "1")
         selectAllTextInField()
-
+        
         app.scrollViews.otherElements.buttons[elementStringIDs.headerButton].tap()
         app.tables.element(boundBy: 0).swipeUp()
         app.tables.staticTexts[elementStringIDs.header6Button].tap()
-
+        
         let text = getHTMLContent()
         let expected = "<h6>1</h6>"
         XCTAssertEqual(expected, text)
+    }
+    
+
+    func testLongTitle() {
+        //    Title line height is about 22px, so it might be useing for comparing the height difference should make it precise.
+        //    But may be fragile due to different font sizes etc
+        let titleLineHeight = 22
+        
+        let titleTextView = app.textViews[elementStringIDs.titleTextField]
+        titleTextView.tap()
+        
+        let oneLineTitleHeight = Int(titleTextView.frame.height)
+        
+        titleTextView.typeText("very very very very very very long title in a galaxy not so far away")
+        let twoLineTitleHeight = Int(titleTextView.frame.height)
+        XCTAssert(twoLineTitleHeight - oneLineTitleHeight == titleLineHeight )
+//        XCTAssert(oneLineTitleHeight < twoLineTitleHeight)
+    }
+    
+
+    func testNewlinesInTitle() {
+        //    Title line height is about 22px, so it might be useing for comparing the height difference should make it precise.
+        //    But may be fragile due to different font sizes etc
+        let titleLineHeight = 22
+        
+        let titleTextView = app.textViews[elementStringIDs.titleTextField]
+        titleTextView.tap()
+        
+        titleTextView.typeText("line 1")
+        let oneLineTitleHeight = Int(titleTextView.frame.height)
+        
+        titleTextView.typeText("\nline 2")
+        let twoLineTitleHeight = Int(titleTextView.frame.height)
+        XCTAssert(twoLineTitleHeight - oneLineTitleHeight == titleLineHeight )
+//        XCTAssert(oneLineTitleHeight < twoLineTitleHeight)
+        
+        titleTextView.typeText("\nline 3")
+        let threeLineTitleHeight = Int(titleTextView.frame.height)
+        XCTAssert(threeLineTitleHeight - twoLineTitleHeight == titleLineHeight )
+//        XCTAssert(twoLineTitleHeight < threeLineTitleHeight)
     }
 }
