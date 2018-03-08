@@ -99,7 +99,18 @@ open class FormatBarItem: UIButton {
     private var originalIcon: UIImage
 
     // MARK: - Lifecycle
-
+    public convenience init(image: UIImage,highlightedImage:UIImage, identifier: String? = nil) {
+        let defaultFrame = CGRect(x: 0, y: 0, width: FormatBar.Constants.defaultButtonWidth, height: FormatBar.Constants.defaultButtonHeight)
+        self.init(image: image, frame: defaultFrame)
+        self.setImage(highlightedImage, for: UIControlState.highlighted)
+        //有选择状态的
+        if identifier == "bold" {
+            self.setImage(highlightedImage, for: UIControlState.selected)
+        }
+        
+        self.identifier = identifier
+    }
+    
     public convenience init(image: UIImage, identifier: String? = nil) {
         let defaultFrame = CGRect(x: 0, y: 0, width: FormatBar.Constants.defaultButtonWidth, height: FormatBar.Constants.defaultButtonHeight)
         self.init(image: image, frame: defaultFrame)

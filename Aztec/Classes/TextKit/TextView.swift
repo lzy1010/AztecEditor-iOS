@@ -668,7 +668,8 @@ open class TextView: UITextView {
         if storage.length > 0 && selectedRange.location < storage.length {
             typingAttributesSwifted = storage.attributes(at: selectedRange.location, effectiveRange: nil)
         }
-
+        selectedRange = NSMakeRange(html.count, 0)
+        
         notifyTextViewDidChange()
         formattingDelegate?.textViewCommandToggledAStyle()
     }
@@ -1257,6 +1258,11 @@ open class TextView: UITextView {
 
     // MARK: - Embeds
 
+    open func addEnter(at range: NSRange){
+        insertText("\n")
+        notifyTextViewDidChange()
+    }
+    
     func replace(at range: NSRange, with attachment: NSTextAttachment) {
         let originalText = textStorage.attributedSubstring(from: range)
         let finalRange = NSRange(location: range.location, length: NSAttributedString.lengthOfTextAttachment)
@@ -1287,6 +1293,7 @@ open class TextView: UITextView {
         attachment.delegate = storage
         attachment.image = placeHolderImage
         replace(at: range, with: attachment)
+        
         return attachment
     }
 

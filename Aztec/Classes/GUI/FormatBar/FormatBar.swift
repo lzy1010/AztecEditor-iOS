@@ -703,7 +703,8 @@ private extension FormatBar {
         ])
 
         NSLayoutConstraint.activate([
-            scrollableStackView.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
+//            scrollableStackView.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
+            scrollableStackView.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor, constant: 10),
             scrollableStackView.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
             scrollableStackView.topAnchor.constraint(equalTo: scrollView.topAnchor),
             scrollableStackView.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor),
@@ -839,7 +840,7 @@ private extension FormatBar {
 private extension FormatBar.Constants {
     static let overflowExpandedUserDefaultsKey = "AztecFormatBarOverflowExpandedKey"
     static let fixedSeparatorMidPointPaddingX = CGFloat(5)
-    static let stackViewCompactSpacing = CGFloat(0)
+    static let stackViewCompactSpacing = CGFloat(5)
     static let stackViewRegularSpacing = CGFloat(0)
     static let horizontalDividerHeight = CGFloat(1)
     static let trailingButtonMargin = CGFloat(12)
